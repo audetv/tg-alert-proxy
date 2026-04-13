@@ -1,16 +1,27 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
+	"github.com/joho/godotenv"
+
+	"github.com/audetv/tg-alert-proxy/internal/adapters/mtproto"
 	"github.com/audetv/tg-alert-proxy/internal/adapters/queue"
+	"github.com/audetv/tg-alert-proxy/internal/adapters/telegram"
+	"github.com/audetv/tg-alert-proxy/internal/app"
 	"github.com/audetv/tg-alert-proxy/internal/config"
-	"github.com/audetv/tg-alert-proxy/internal/domain"
 )
+
+func init() {
+	// Загружаем .env файл если существует
+	if err := godotenv.Load(); err != nil {
+		log.Printf("⚠️ No .env file found, using environment variables")
+	}
+}
 
 func main() {
 	cfg := config.Load()
@@ -30,15 +41,33 @@ func main() {
 		log.Printf("📦 Loaded %d messages from %s", msgQueue.Len(), queuePath)
 	}
 
-	// Тестовое сообщение
-	testMsg := &domain.Message{
-		Token:     "test_token",
-		ChatID:    "@test_channel",
-		Text:      "Test alert message",
-		CreatedAt: time.Now(),
+	// Создаем MTProto сендер
+	mtprotoCfg := &mtproto.Config{
+		ProxyEnabled: cfg.ProxyEnabled,
+		ProxyAddr:    cfg.ProxyAddr,
+		ProxySecret:  cfg.ProxySecret,
+		AppID:        cfg.AppID,
+		AppHash:      cfg.AppHash,
 	}
-	msgQueue.Push(testMsg)
-	log.Printf("📝 Queue size: %d", msgQueue.Len())
+
+	sender, err := telegram.NewSender(mtprotoCfg)
+	if err != nil {
+		log.Fatalf("❌ Failed to create sender: %v", err)
+	}
+
+	// Подключаем сендер
+	ctx := context.Background()
+	if err := sender.Connect(ctx); err != nil {
+		log.Printf("⚠️ Failed to connect sender: %v (will retry)", err)
+		// Не фатально, сервис продолжит работу и будет ставить сообщения в очередь
+	}
+	defer sender.Close()
+
+	// Создаем сервис
+	service := app.NewService(sender, msgQueue)
+
+	log.Printf("✅ Service ready, sender_ready=%v, queue_size=%d",
+		sender.IsReady(), msgQueue.Len())
 
 	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -48,7 +77,10 @@ func main() {
 		<-sigChan
 		log.Println("🛑 Shutting down...")
 
-		// Сохраняем очередь перед выходом
+		// Останавливаем сервис
+		service.Stop()
+
+		// Сохраняем очередь
 		if err := msgQueue.SaveToFile(queuePath); err != nil {
 			log.Printf("❌ Failed to save queue: %v", err)
 		} else {
@@ -58,6 +90,6 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Держим приложение запущенным
+	// Держим приложение запущенным (пока без HTTP сервера)
 	select {}
 }
