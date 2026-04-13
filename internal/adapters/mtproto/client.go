@@ -37,6 +37,7 @@ type Config struct {
 	ProxySecret  string
 	AppID        int
 	AppHash      string
+	SessionDir   string
 }
 
 // New создает новый MTProto клиент
@@ -84,37 +85,63 @@ func New(cfg *Config) (*Client, error) {
 	}, nil
 }
 
-// Connect подключается к Telegram (запускает Run в горутине)
+// Connect подключается к Telegram и запускает прогрев кеша
 func (c *Client) Connect(parentCtx context.Context) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	c.cancel = cancel
 
-	// Запускаем Run в горутине
-	go func() {
-		if err := c.client.Run(ctx, func(ctx context.Context) error {
-			start := time.Now()
-			log.Printf("🔐 MTProto Run started")
+	return c.client.Run(ctx, func(ctx context.Context) error {
+		start := time.Now()
+		log.Printf("🔐 MTProto Run started")
 
-			c.api = c.client.API()
-			c.sender = message.NewSender(c.api)
+		c.api = c.client.API()
+		c.sender = message.NewSender(c.api)
 
-			c.mu.Lock()
-			c.ready = true
-			c.mu.Unlock()
+		// Прогреваем кеш диалогов для получения AccessHash
+		go c.fetchUpdates(ctx)
 
-			log.Printf("✅ MTProto client ready in %v", time.Since(start))
+		c.mu.Lock()
+		c.ready = true
+		c.mu.Unlock()
 
-			<-ctx.Done()
-			return ctx.Err()
-		}); err != nil {
-			log.Printf("❌ MTProto Run failed: %v", err)
-			c.mu.Lock()
-			c.ready = false
-			c.mu.Unlock()
+		log.Printf("✅ MTProto client ready in %v", time.Since(start))
+
+		<-ctx.Done()
+		return ctx.Err()
+	})
+}
+
+// fetchUpdates получает диалоги для прогрева кеша AccessHash
+func (c *Client) fetchUpdates(ctx context.Context) {
+	log.Printf("🔥 Warming up cache: fetching dialogs...")
+
+	// Получаем диалоги (чаты, в которых бот участвует)
+	dialogs, err := c.api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+		Limit: 100,
+	})
+	if err != nil {
+		log.Printf("⚠️ Failed to fetch dialogs: %v", err)
+		return
+	}
+
+	// Логируем найденные чаты
+	if dialogsSlice, ok := dialogs.(*tg.MessagesDialogsSlice); ok {
+		log.Printf("📡 Found %d chats in dialogs", len(dialogsSlice.Chats))
+		for _, chat := range dialogsSlice.Chats {
+			if ch, ok := chat.(*tg.Channel); ok {
+				log.Printf("   📌 Channel: %s (ID: %d, AccessHash: %d)",
+					ch.Title, ch.ID, ch.AccessHash)
+			}
+			if ch, ok := chat.(*tg.Chat); ok {
+				log.Printf("   👥 Group: %s (ID: %d)", ch.Title, ch.ID)
+			}
 		}
-	}()
+	}
 
-	return nil
+	// Также пробуем получить конкретный канал по ID (если есть в конфиге)
+	// Это можно расширить позже
+
+	log.Printf("✅ Cache warmup completed")
 }
 
 // ensureAuth проверяет и при необходимости выполняет авторизацию с токеном
@@ -183,56 +210,86 @@ func (c *Client) SendMessage(ctx context.Context, token, chatID, text string) (i
 	return extractMessageID(result), nil
 }
 
-// resolvePeer определяет peer по chatID (username или ID канала/группы)
 func (c *Client) resolvePeer(ctx context.Context, chatID string) (tg.InputPeerClass, error) {
-	// Если начинается с @ - это username
+	// 1. Обработка username (@name)
 	if len(chatID) > 0 && chatID[0] == '@' {
 		username := chatID[1:]
 		resolved, err := c.api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{
 			Username: username,
 		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("resolve username @%s: %w", username, err)
 		}
-		if len(resolved.Chats) > 0 {
-			if ch, ok := resolved.Chats[0].(*tg.Channel); ok {
+
+		for _, chat := range resolved.Chats {
+			if ch, ok := chat.(*tg.Channel); ok {
+				log.Printf("📡 Resolved @%s -> channel %d with AccessHash", username, ch.ID)
 				return &tg.InputPeerChannel{
 					ChannelID:  ch.ID,
 					AccessHash: ch.AccessHash,
 				}, nil
 			}
 		}
-		return nil, fmt.Errorf("chat not found: %s", chatID)
+
+		return nil, fmt.Errorf("peer not found: %s", chatID)
 	}
 
-	// Для числового ID (канал или супергруппа)
+	// 2. Обработка числового ID
 	id, err := strconv.ParseInt(chatID, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid chat ID: %w", err)
 	}
 
-	// Пробуем получить AccessHash через API
-	inputChannel := &tg.InputChannel{
-		ChannelID: id,
-	}
+	// Для каналов (-100...)
+	if strings.HasPrefix(chatID, "-100") {
+		// Сначала пробуем найти в диалогах (кеш уже прогрет)
+		dialogs, err := c.api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+			Limit: 100,
+		})
+		if err == nil {
+			if dialogsSlice, ok := dialogs.(*tg.MessagesDialogsSlice); ok {
+				for _, chat := range dialogsSlice.Chats {
+					if ch, ok := chat.(*tg.Channel); ok && ch.ID == id {
+						log.Printf("📡 Found channel %d in cached dialogs, using AccessHash", id)
+						return &tg.InputPeerChannel{
+							ChannelID:  ch.ID,
+							AccessHash: ch.AccessHash,
+						}, nil
+					}
+				}
+			}
+		}
 
-	channels, err := c.api.ChannelsGetChannels(ctx, []tg.InputChannelClass{inputChannel})
-	if err == nil {
-		chats := channels.GetChats()
-		if len(chats) > 0 {
-			if ch, ok := chats[0].(*tg.Channel); ok {
-				log.Printf("📡 Got AccessHash for channel %d", id)
+		// Если не нашли в кеше — пробуем запросить напрямую
+		inputChannel := &tg.InputChannel{
+			ChannelID:  id,
+			AccessHash: 0,
+		}
+
+		channels, err := c.api.ChannelsGetChannels(ctx, []tg.InputChannelClass{inputChannel})
+		if err != nil {
+			return nil, fmt.Errorf("channel %d not accessible: %w", id, err)
+		}
+
+		for _, chat := range channels.GetChats() {
+			if ch, ok := chat.(*tg.Channel); ok {
+				log.Printf("📡 Got AccessHash for channel %d from API", id)
 				return &tg.InputPeerChannel{
 					ChannelID:  ch.ID,
 					AccessHash: ch.AccessHash,
 				}, nil
 			}
 		}
+
+		return nil, fmt.Errorf("channel %d not accessible: AccessHash missing", id)
 	}
 
-	// Если не удалось получить хеш - пробуем без него (для супергрупп и личных чатов)
-	log.Printf("⚠️ No AccessHash for %d, trying without it", id)
-	return &tg.InputPeerChannel{ChannelID: id}, nil
+	// Для обычных групп (отрицательный ID без -100)
+	if id < 0 {
+		return &tg.InputPeerChat{ChatID: -id}, nil
+	}
+
+	return nil, fmt.Errorf("cannot resolve user %d without AccessHash", id)
 }
 
 // IsReady возвращает готовность клиента
