@@ -12,7 +12,17 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -tags netgo -ldflags '-w -extldflags "-static"' -o tg-alert-proxy ./cmd/server
+# Аргументы для версионирования
+ARG VERSION=dev
+ARG COMMIT=none
+ARG BUILD_TIME=unknown
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -tags netgo \
+    -ldflags "-w -extldflags '-static' \
+              -X github.com/audetv/tg-alert-proxy/internal/version.Version=${VERSION} \
+              -X github.com/audetv/tg-alert-proxy/internal/version.Commit=${COMMIT} \
+              -X github.com/audetv/tg-alert-proxy/internal/version.BuildTime=${BUILD_TIME}" \
+    -o tg-alert-proxy ./cmd/server
 
 # Финальный образ
 FROM scratch

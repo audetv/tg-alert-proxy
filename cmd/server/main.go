@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/audetv/tg-alert-proxy/internal/adapters/telegram"
 	"github.com/audetv/tg-alert-proxy/internal/app"
 	"github.com/audetv/tg-alert-proxy/internal/config"
+	"github.com/audetv/tg-alert-proxy/internal/version"
 )
 
 func init() {
@@ -27,9 +29,18 @@ func init() {
 }
 
 func main() {
+	// Проверяем флаг версии
+	showVersion := flag.Bool("version", false, "Show version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		log.Printf("tg-alert-proxy %s", version.String())
+		os.Exit(0)
+	}
+
 	cfg := config.Load()
 
-	log.Printf("🚀 tg-alert-proxy starting...")
+	log.Printf("🚀 tg-alert-proxy %s starting...", version.String())
 	log.Printf("📋 Config: HTTP_PORT=%s, ProxyEnabled=%v, QueueMaxSize=%d, QueuePath=%s",
 		cfg.HTTPPort, cfg.ProxyEnabled, cfg.QueueMaxSize, cfg.QueueFilePath())
 
