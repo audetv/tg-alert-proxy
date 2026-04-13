@@ -29,15 +29,32 @@ func NewSender(cfg *mtproto.Config) (*Sender, error) {
 	}, nil
 }
 
-// Connect подключает клиент к Telegram
+// Connect подключает клиент к Telegram (не блокирует)
 func (s *Sender) Connect(ctx context.Context) error {
-	log.Printf("🔌 Connecting MTProto client...")
-	if err := s.client.Connect(ctx); err != nil {
-		return fmt.Errorf("connect failed: %w", err)
+	log.Printf("🔌 Starting MTProto client connection...")
+
+	// Запускаем подключение в горутине
+	go func() {
+		if err := s.client.Connect(ctx); err != nil {
+			log.Printf("❌ MTProto connect failed: %v", err)
+			return
+		}
+		s.ready = true
+		log.Printf("✅ MTProto client connected")
+	}()
+
+	// Ждем готовности до 30 секунд
+	for i := 0; i < 60; i++ {
+		if s.client.IsReady() {
+			s.ready = true
+			log.Printf("✅ MTProto client ready")
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	s.ready = true
-	log.Printf("✅ MTProto client connected")
-	return nil
+
+	log.Printf("⚠️ MTProto client not ready after 30s, will retry in background")
+	return nil // Не возвращаем ошибку, сервис продолжит работу
 }
 
 // Send отправляет сообщение в Telegram

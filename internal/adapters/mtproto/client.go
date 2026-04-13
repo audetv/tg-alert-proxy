@@ -84,27 +84,37 @@ func New(cfg *Config) (*Client, error) {
 	}, nil
 }
 
-// Connect подключается к Telegram (без начальной авторизации)
+// Connect подключается к Telegram (запускает Run в горутине)
 func (c *Client) Connect(parentCtx context.Context) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	c.cancel = cancel
 
-	return c.client.Run(ctx, func(ctx context.Context) error {
-		start := time.Now()
-		log.Printf("🔐 MTProto Run started")
+	// Запускаем Run в горутине
+	go func() {
+		if err := c.client.Run(ctx, func(ctx context.Context) error {
+			start := time.Now()
+			log.Printf("🔐 MTProto Run started")
 
-		c.api = c.client.API()
-		c.sender = message.NewSender(c.api)
+			c.api = c.client.API()
+			c.sender = message.NewSender(c.api)
 
-		c.mu.Lock()
-		c.ready = true
-		c.mu.Unlock()
+			c.mu.Lock()
+			c.ready = true
+			c.mu.Unlock()
 
-		log.Printf("✅ MTProto client ready in %v", time.Since(start))
+			log.Printf("✅ MTProto client ready in %v", time.Since(start))
 
-		<-ctx.Done()
-		return ctx.Err()
-	})
+			<-ctx.Done()
+			return ctx.Err()
+		}); err != nil {
+			log.Printf("❌ MTProto Run failed: %v", err)
+			c.mu.Lock()
+			c.ready = false
+			c.mu.Unlock()
+		}
+	}()
+
+	return nil
 }
 
 // ensureAuth проверяет и при необходимости выполняет авторизацию с токеном
