@@ -16,17 +16,18 @@ func main() {
 	cfg := config.Load()
 
 	log.Printf("🚀 tg-alert-proxy starting...")
-	log.Printf("📋 Config: HTTP_PORT=%s, ProxyEnabled=%v, QueueMaxSize=%d",
-		cfg.HTTPPort, cfg.ProxyEnabled, cfg.QueueMaxSize)
+	log.Printf("📋 Config: HTTP_PORT=%s, ProxyEnabled=%v, QueueMaxSize=%d, QueuePath=%s",
+		cfg.HTTPPort, cfg.ProxyEnabled, cfg.QueueMaxSize, cfg.QueueFilePath())
 
 	// Создаем очередь
 	msgQueue := queue.NewMemoryQueue(cfg.QueueMaxSize)
 
 	// Загружаем сохраненные сообщения
-	if err := msgQueue.LoadFromFile(cfg.QueueFilePath); err != nil {
+	queuePath := cfg.QueueFilePath()
+	if err := msgQueue.LoadFromFile(queuePath); err != nil {
 		log.Printf("⚠️ Failed to load queue from file: %v", err)
-	} else {
-		log.Printf("📦 Loaded %d messages from queue file", msgQueue.Len())
+	} else if msgQueue.Len() > 0 {
+		log.Printf("📦 Loaded %d messages from %s", msgQueue.Len(), queuePath)
 	}
 
 	// Тестовое сообщение
@@ -48,10 +49,10 @@ func main() {
 		log.Println("🛑 Shutting down...")
 
 		// Сохраняем очередь перед выходом
-		if err := msgQueue.SaveToFile(cfg.QueueFilePath); err != nil {
+		if err := msgQueue.SaveToFile(queuePath); err != nil {
 			log.Printf("❌ Failed to save queue: %v", err)
 		} else {
-			log.Printf("💾 Queue saved to %s (%d messages)", cfg.QueueFilePath, msgQueue.Len())
+			log.Printf("💾 Queue saved to %s (%d messages)", queuePath, msgQueue.Len())
 		}
 
 		os.Exit(0)

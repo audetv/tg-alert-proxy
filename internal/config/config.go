@@ -14,7 +14,8 @@ type Config struct {
 	AppID          int
 	AppHash        string
 	QueueMaxSize   int
-	QueueFilePath  string
+	QueueDir       string
+	QueueFileName  string
 	MetricsEnabled bool
 }
 
@@ -28,9 +29,18 @@ func Load() *Config {
 		AppID:          getEnvInt("TG_APP_ID", 2040),
 		AppHash:        getEnv("TG_APP_HASH", "b18441a1ff607e10a989891a5462e627"),
 		QueueMaxSize:   getEnvInt("QUEUE_MAX_SIZE", 100),
-		QueueFilePath:  getEnv("QUEUE_FILE_PATH", "/data/queue.json"),
+		QueueDir:       getEnv("QUEUE_DIR", "./data"),
+		QueueFileName:  getEnv("QUEUE_FILE_NAME", "queue.json"),
 		MetricsEnabled: getEnvBool("METRICS_ENABLED", true),
 	}
+}
+
+// QueueFilePath возвращает полный путь к файлу очереди
+func (c *Config) QueueFilePath() string {
+	if c.QueueDir == "" {
+		return c.QueueFileName
+	}
+	return c.QueueDir + "/" + c.QueueFileName
 }
 
 func getEnv(key, defaultVal string) string {
