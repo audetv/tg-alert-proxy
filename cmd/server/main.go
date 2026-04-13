@@ -62,6 +62,7 @@ func main() {
 		ProxySecret:  cfg.ProxySecret,
 		AppID:        cfg.AppID,
 		AppHash:      cfg.AppHash,
+		SessionDir:   cfg.SessionDir,
 	}
 
 	sender, err := telegram.NewSender(mtprotoCfg)

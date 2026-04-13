@@ -85,7 +85,7 @@ func New(cfg *Config) (*Client, error) {
 	}, nil
 }
 
-// Connect подключается к Telegram и запускает прогрев кеша
+// Connect подключается к Telegram (без авторизации и прогрева)
 func (c *Client) Connect(parentCtx context.Context) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	c.cancel = cancel
@@ -96,9 +96,6 @@ func (c *Client) Connect(parentCtx context.Context) error {
 
 		c.api = c.client.API()
 		c.sender = message.NewSender(c.api)
-
-		// Прогреваем кеш диалогов для получения AccessHash
-		go c.fetchUpdates(ctx)
 
 		c.mu.Lock()
 		c.ready = true

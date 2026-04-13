@@ -31,6 +31,7 @@ services:
       - QUEUE_MAX_SIZE=${QUEUE_MAX_SIZE:-100}
       - QUEUE_DIR=/data
       - QUEUE_FILE_NAME=queue.json
+      - SESSION_DIR=/data
     volumes:
       - ./data:/data
     networks:

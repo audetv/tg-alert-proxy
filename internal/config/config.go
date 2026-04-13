@@ -17,6 +17,7 @@ type Config struct {
 	QueueDir       string
 	QueueFileName  string
 	MetricsEnabled bool
+	SessionDir     string
 }
 
 // Load загружает конфигурацию из переменных окружения
@@ -32,6 +33,7 @@ func Load() *Config {
 		QueueDir:       getEnv("QUEUE_DIR", "./data"),
 		QueueFileName:  getEnv("QUEUE_FILE_NAME", "queue.json"),
 		MetricsEnabled: getEnvBool("METRICS_ENABLED", true),
+		SessionDir:     getEnv("SESSION_DIR", "/data"),
 	}
 }
 
