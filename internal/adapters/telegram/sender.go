@@ -40,9 +40,8 @@ func (s *Sender) Connect(ctx context.Context) error {
 			return
 		}
 
-		// После успешного Connect клиент уже готов
 		s.ready = true
-		log.Printf("✅ Sender ready (MTProto client connected)")
+		log.Printf("✅ Sender ready")
 	}()
 
 	return nil

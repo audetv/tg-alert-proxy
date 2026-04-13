@@ -85,27 +85,50 @@ func New(cfg *Config) (*Client, error) {
 	}, nil
 }
 
-// Connect подключается к Telegram (без авторизации и прогрева)
+// Connect подключается к Telegram и ждёт готовности
 func (c *Client) Connect(parentCtx context.Context) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	c.cancel = cancel
 
-	return c.client.Run(ctx, func(ctx context.Context) error {
-		start := time.Now()
-		log.Printf("🔐 MTProto Run started")
+	// Канал для сигнала готовности
+	readyCh := make(chan struct{})
 
-		c.api = c.client.API()
-		c.sender = message.NewSender(c.api)
+	go func() {
+		if err := c.client.Run(ctx, func(ctx context.Context) error {
+			start := time.Now()
+			log.Printf("🔐 MTProto Run started")
 
-		c.mu.Lock()
-		c.ready = true
-		c.mu.Unlock()
+			c.api = c.client.API()
+			c.sender = message.NewSender(c.api)
 
-		log.Printf("✅ MTProto client ready in %v", time.Since(start))
+			c.mu.Lock()
+			c.ready = true
+			c.mu.Unlock()
 
-		<-ctx.Done()
+			close(readyCh) // Сигнализируем о готовности
+
+			log.Printf("✅ MTProto client ready in %v", time.Since(start))
+
+			<-ctx.Done()
+			return ctx.Err()
+		}); err != nil {
+			log.Printf("❌ MTProto Run failed: %v", err)
+			c.mu.Lock()
+			c.ready = false
+			c.mu.Unlock()
+		}
+	}()
+
+	// Ждём готовности или таймаута
+	select {
+	case <-readyCh:
+		log.Printf("✅ MTProto client connected and ready")
+		return nil
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("timeout waiting for MTProto client to be ready")
+	case <-ctx.Done():
 		return ctx.Err()
-	})
+	}
 }
 
 // fetchUpdates получает диалоги для прогрева кеша AccessHash
