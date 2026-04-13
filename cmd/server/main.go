@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 
+	httpadapter "github.com/audetv/tg-alert-proxy/internal/adapters/http"
 	"github.com/audetv/tg-alert-proxy/internal/adapters/mtproto"
 	"github.com/audetv/tg-alert-proxy/internal/adapters/queue"
 	"github.com/audetv/tg-alert-proxy/internal/adapters/telegram"
@@ -59,37 +62,50 @@ func main() {
 	ctx := context.Background()
 	if err := sender.Connect(ctx); err != nil {
 		log.Printf("⚠️ Failed to connect sender: %v (will retry)", err)
-		// Не фатально, сервис продолжит работу и будет ставить сообщения в очередь
 	}
 	defer sender.Close()
 
 	// Создаем сервис
 	service := app.NewService(sender, msgQueue)
 
+	// Создаем HTTP обработчик и сервер
+	handler := httpadapter.NewHandler(service)
+	server := httpadapter.NewServer(cfg.HTTPPort, handler)
+
+	// Запускаем HTTP сервер в горутине
+	go func() {
+		if err := server.Start(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("❌ HTTP server failed: %v", err)
+		}
+	}()
+
 	log.Printf("✅ Service ready, sender_ready=%v, queue_size=%d",
 		sender.IsReady(), msgQueue.Len())
+	log.Printf("🌐 Send alerts via: POST http://localhost:%s/send", cfg.HTTPPort)
 
 	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		<-sigChan
-		log.Println("🛑 Shutting down...")
+	<-sigChan
+	log.Println("🛑 Shutting down...")
 
-		// Останавливаем сервис
-		service.Stop()
+	// Останавливаем сервис
+	service.Stop()
 
-		// Сохраняем очередь
-		if err := msgQueue.SaveToFile(queuePath); err != nil {
-			log.Printf("❌ Failed to save queue: %v", err)
-		} else {
-			log.Printf("💾 Queue saved to %s (%d messages)", queuePath, msgQueue.Len())
-		}
+	// Останавливаем HTTP сервер
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("⚠️ HTTP server shutdown error: %v", err)
+	}
 
-		os.Exit(0)
-	}()
+	// Сохраняем очередь
+	if err := msgQueue.SaveToFile(queuePath); err != nil {
+		log.Printf("❌ Failed to save queue: %v", err)
+	} else {
+		log.Printf("💾 Queue saved to %s (%d messages)", queuePath, msgQueue.Len())
+	}
 
-	// Держим приложение запущенным (пока без HTTP сервера)
-	select {}
+	log.Println("👋 Goodbye!")
 }
