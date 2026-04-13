@@ -183,8 +183,9 @@ func (c *Client) SendMessage(ctx context.Context, token, chatID, text string) (i
 	return extractMessageID(result), nil
 }
 
-// resolvePeer определяет peer по chatID (username или ID)
+// resolvePeer определяет peer по chatID (username или ID канала/группы)
 func (c *Client) resolvePeer(ctx context.Context, chatID string) (tg.InputPeerClass, error) {
+	// Если начинается с @ - это username
 	if len(chatID) > 0 && chatID[0] == '@' {
 		username := chatID[1:]
 		resolved, err := c.api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{
@@ -204,10 +205,33 @@ func (c *Client) resolvePeer(ctx context.Context, chatID string) (tg.InputPeerCl
 		return nil, fmt.Errorf("chat not found: %s", chatID)
 	}
 
+	// Для числового ID (канал или супергруппа)
 	id, err := strconv.ParseInt(chatID, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid chat ID: %w", err)
 	}
+
+	// Пробуем получить AccessHash через API
+	inputChannel := &tg.InputChannel{
+		ChannelID: id,
+	}
+
+	channels, err := c.api.ChannelsGetChannels(ctx, []tg.InputChannelClass{inputChannel})
+	if err == nil {
+		chats := channels.GetChats()
+		if len(chats) > 0 {
+			if ch, ok := chats[0].(*tg.Channel); ok {
+				log.Printf("📡 Got AccessHash for channel %d", id)
+				return &tg.InputPeerChannel{
+					ChannelID:  ch.ID,
+					AccessHash: ch.AccessHash,
+				}, nil
+			}
+		}
+	}
+
+	// Если не удалось получить хеш - пробуем без него (для супергрупп и личных чатов)
+	log.Printf("⚠️ No AccessHash for %d, trying without it", id)
 	return &tg.InputPeerChannel{ChannelID: id}, nil
 }
 
