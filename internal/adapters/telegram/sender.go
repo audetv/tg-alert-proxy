@@ -40,17 +40,9 @@ func (s *Sender) Connect(ctx context.Context) error {
 			return
 		}
 
-		// Ждем готовности внутри горутины
-		for i := 0; i < 60; i++ {
-			if s.client.IsReady() {
-				s.ready = true
-				log.Printf("✅ MTProto client ready")
-				return
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-
-		log.Printf("⚠️ MTProto client not ready after 30s")
+		// После успешного Connect клиент уже готов
+		s.ready = true
+		log.Printf("✅ Sender ready (MTProto client connected)")
 	}()
 
 	return nil
