@@ -1,0 +1,50 @@
+services:
+  tg-ws-proxy:
+    image: ghcr.io/audetv/tg-ws-proxy:latest
+    container_name: tg-ws-proxy
+    environment:
+      - TG_WS_PROXY_HOST=0.0.0.0
+      - TG_WS_PROXY_PORT=1443
+      - TG_WS_PROXY_DC_IPS=2:149.154.167.220 4:149.154.167.220
+      - TG_WS_PROXY_SECRET=${TG_WS_PROXY_SECRET}
+    networks:
+      - alert-net
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  tg-alert-proxy:
+    build: .
+    container_name: tg-alert-proxy
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    environment:
+      - HTTP_PORT=8080
+      - TG_WS_PROXY_ENABLED=${TG_WS_PROXY_ENABLED:-true}
+      - TG_WS_PROXY_ADDR=${TG_WS_PROXY_ADDR:-tg-ws-proxy:1443}
+      - TG_WS_PROXY_SECRET=${TG_WS_PROXY_SECRET}
+      - TG_APP_ID=${TG_APP_ID:-2040}
+      - TG_APP_HASH=${TG_APP_HASH:-b18441a1ff607e10a989891a5462e627}
+      - QUEUE_MAX_SIZE=${QUEUE_MAX_SIZE:-100}
+      - QUEUE_DIR=/data
+      - QUEUE_FILE_NAME=queue.json
+      - METRICS_ENABLED=${METRICS_ENABLED:-true}
+    volumes:
+      - ./data:/data
+    networks:
+      - alert-net
+    depends_on:
+      - tg-ws-proxy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  alert-net:
+    driver: bridge

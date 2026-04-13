@@ -1,0 +1,8 @@
+.git
+.gitignore
+.env
+.env.local
+data/
+*.md
+.DS_Store
+tg-alert-proxy

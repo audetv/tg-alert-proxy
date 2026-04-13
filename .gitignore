@@ -37,3 +37,6 @@ queue.json
 # Env
 .env
 .env.local
+
+# Data directory (для Docker volume)
+data/

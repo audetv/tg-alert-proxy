@@ -58,13 +58,6 @@ func main() {
 		log.Fatalf("❌ Failed to create sender: %v", err)
 	}
 
-	// Подключаем сендер
-	ctx := context.Background()
-	if err := sender.Connect(ctx); err != nil {
-		log.Printf("⚠️ Failed to connect sender: %v (will retry)", err)
-	}
-	defer sender.Close()
-
 	// Создаем сервис
 	service := app.NewService(sender, msgQueue)
 
@@ -72,18 +65,28 @@ func main() {
 	handler := httpadapter.NewHandler(service)
 	server := httpadapter.NewServer(cfg.HTTPPort, handler)
 
-	// Запускаем HTTP сервер в горутине
+	// 1. ЗАПУСКАЕМ HTTP СЕРВЕР В ГОРУТИНЕ (не ждём MTProto)
 	go func() {
+		log.Printf("🌐 HTTP server listening on :%s", cfg.HTTPPort)
+		log.Printf("📨 Send alerts via: POST http://localhost:%s/send", cfg.HTTPPort)
 		if err := server.Start(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("❌ HTTP server failed: %v", err)
 		}
 	}()
 
-	log.Printf("✅ Service ready, sender_ready=%v, queue_size=%d",
-		sender.IsReady(), msgQueue.Len())
-	log.Printf("🌐 Send alerts via: POST http://localhost:%s/send", cfg.HTTPPort)
+	// 2. ЗАПУСКАЕМ ПОДКЛЮЧЕНИЕ SENDER В ФОНЕ
+	go func() {
+		log.Printf("🔄 MTProto connecting in background...")
+		ctx := context.Background()
+		if err := sender.Connect(ctx); err != nil {
+			log.Printf("⚠️ Failed to connect sender: %v (will retry)", err)
+		}
+	}()
 
-	// Graceful shutdown
+	log.Printf("✅ Service initialized, sender_ready=%v, queue_size=%d",
+		sender.IsReady(), msgQueue.Len())
+
+	// 3. ОЖИДАЕМ СИГНАЛ ЗАВЕРШЕНИЯ
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -98,6 +101,11 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("⚠️ HTTP server shutdown error: %v", err)
+	}
+
+	// Закрываем sender
+	if err := sender.Close(); err != nil {
+		log.Printf("⚠️ Sender close error: %v", err)
 	}
 
 	// Сохраняем очередь
