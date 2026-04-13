@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,10 @@ type Client struct {
 	mu     sync.RWMutex
 	ready  bool
 	cancel context.CancelFunc
+
+	// Кеш авторизованных токенов
+	authCache map[string]bool
+	authMu    sync.RWMutex
 }
 
 // Config конфигурация MTProto клиента
@@ -74,35 +79,19 @@ func New(cfg *Config) (*Client, error) {
 	})
 
 	return &Client{
-		client: client,
+		client:    client,
+		authCache: make(map[string]bool),
 	}, nil
 }
 
-// Connect подключается к Telegram и авторизует бота
-func (c *Client) Connect(parentCtx context.Context, token string) error {
+// Connect подключается к Telegram (без начальной авторизации)
+func (c *Client) Connect(parentCtx context.Context) error {
 	ctx, cancel := context.WithCancel(parentCtx)
 	c.cancel = cancel
 
 	return c.client.Run(ctx, func(ctx context.Context) error {
 		start := time.Now()
 		log.Printf("🔐 MTProto Run started")
-
-		// Проверяем статус
-		status, err := c.client.Auth().Status(ctx)
-		if err != nil {
-			log.Printf("⚠️ Auth status check failed: %v", err)
-		} else {
-			log.Printf("📊 Auth status: authorized=%v", status.Authorized)
-		}
-
-		// Авторизуем бота
-		log.Printf("🔐 Authenticating bot...")
-		authStart := time.Now()
-		if _, err := c.client.Auth().Bot(ctx, token); err != nil {
-			log.Printf("❌ Auth failed after %v: %v", time.Since(authStart), err)
-			return fmt.Errorf("auth failed: %w", err)
-		}
-		log.Printf("✅ Auth completed in %v", time.Since(authStart))
 
 		c.api = c.client.API()
 		c.sender = message.NewSender(c.api)
@@ -118,6 +107,42 @@ func (c *Client) Connect(parentCtx context.Context, token string) error {
 	})
 }
 
+// ensureAuth проверяет и при необходимости выполняет авторизацию с токеном
+func (c *Client) ensureAuth(ctx context.Context, token string) error {
+	// Проверяем кеш
+	c.authMu.RLock()
+	if c.authCache[token] {
+		c.authMu.RUnlock()
+		return nil
+	}
+	c.authMu.RUnlock()
+
+	// Выполняем авторизацию
+	log.Printf("🔐 Authorizing bot with token: %s...", token[:min(10, len(token))])
+
+	if _, err := c.client.Auth().Bot(ctx, token); err != nil {
+		// Проверяем, не авторизованы ли уже
+		if strings.Contains(err.Error(), "already authorized") ||
+			strings.Contains(err.Error(), "Unauthorized") == false {
+			// Сохраняем в кеш даже при некоторых ошибках
+			c.authMu.Lock()
+			c.authCache[token] = true
+			c.authMu.Unlock()
+			log.Printf("✅ Bot already authorized")
+			return nil
+		}
+		return fmt.Errorf("auth failed: %w", err)
+	}
+
+	// Сохраняем в кеш
+	c.authMu.Lock()
+	c.authCache[token] = true
+	c.authMu.Unlock()
+
+	log.Printf("✅ Bot authorized successfully")
+	return nil
+}
+
 // SendMessage отправляет простое текстовое сообщение
 func (c *Client) SendMessage(ctx context.Context, token, chatID, text string) (int, error) {
 	c.mu.RLock()
@@ -128,8 +153,10 @@ func (c *Client) SendMessage(ctx context.Context, token, chatID, text string) (i
 		return 0, fmt.Errorf("client not ready")
 	}
 
-	// Временно авторизуемся с переданным токеном, если он отличается
-	// TODO: поддержка множества токенов
+	// Авторизуемся с токеном (использует кеш)
+	if err := c.ensureAuth(ctx, token); err != nil {
+		return 0, fmt.Errorf("auth failed: %w", err)
+	}
 
 	peer, err := c.resolvePeer(ctx, chatID)
 	if err != nil {
@@ -148,7 +175,6 @@ func (c *Client) SendMessage(ctx context.Context, token, chatID, text string) (i
 
 // resolvePeer определяет peer по chatID (username или ID)
 func (c *Client) resolvePeer(ctx context.Context, chatID string) (tg.InputPeerClass, error) {
-	// Если начинается с @ - это username
 	if len(chatID) > 0 && chatID[0] == '@' {
 		username := chatID[1:]
 		resolved, err := c.api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{
@@ -168,7 +194,6 @@ func (c *Client) resolvePeer(ctx context.Context, chatID string) (tg.InputPeerCl
 		return nil, fmt.Errorf("chat not found: %s", chatID)
 	}
 
-	// Иначе пробуем как числовой ID
 	id, err := strconv.ParseInt(chatID, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid chat ID: %w", err)
@@ -209,4 +234,11 @@ func extractMessageID(result tg.UpdatesClass) int {
 		}
 	}
 	return 0
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
