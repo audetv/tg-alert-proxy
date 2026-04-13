@@ -115,9 +115,10 @@ func (c *Client) Connect(parentCtx context.Context) error {
 func (c *Client) fetchUpdates(ctx context.Context) {
 	log.Printf("🔥 Warming up cache: fetching dialogs...")
 
-	// Получаем диалоги (чаты, в которых бот участвует)
+	// Правильный запрос с пустым offset_peer
 	dialogs, err := c.api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-		Limit: 100,
+		OffsetPeer: &tg.InputPeerEmpty{}, // Пустой peer вместо nil
+		Limit:      100,
 	})
 	if err != nil {
 		log.Printf("⚠️ Failed to fetch dialogs: %v", err)
@@ -136,10 +137,15 @@ func (c *Client) fetchUpdates(ctx context.Context) {
 				log.Printf("   👥 Group: %s (ID: %d)", ch.Title, ch.ID)
 			}
 		}
+	} else if dialogsClass, ok := dialogs.(*tg.MessagesDialogs); ok {
+		log.Printf("📡 Found %d chats", len(dialogsClass.Chats))
+		for _, chat := range dialogsClass.Chats {
+			if ch, ok := chat.(*tg.Channel); ok {
+				log.Printf("   📌 Channel: %s (ID: %d, AccessHash: %d)",
+					ch.Title, ch.ID, ch.AccessHash)
+			}
+		}
 	}
-
-	// Также пробуем получить конкретный канал по ID (если есть в конфиге)
-	// Это можно расширить позже
 
 	log.Printf("✅ Cache warmup completed")
 }
@@ -242,9 +248,10 @@ func (c *Client) resolvePeer(ctx context.Context, chatID string) (tg.InputPeerCl
 
 	// Для каналов (-100...)
 	if strings.HasPrefix(chatID, "-100") {
-		// Сначала пробуем найти в диалогах (кеш уже прогрет)
+		// Сначала пробуем найти в диалогах
 		dialogs, err := c.api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-			Limit: 100,
+			OffsetPeer: &tg.InputPeerEmpty{},
+			Limit:      100,
 		})
 		if err == nil {
 			if dialogsSlice, ok := dialogs.(*tg.MessagesDialogsSlice); ok {
