@@ -2,6 +2,9 @@
 
 FROM golang:1.25-alpine AS builder
 
+# Устанавливаем tzdata для zoneinfo
+RUN apk add --no-cache tzdata
+
 WORKDIR /app
 
 COPY go.mod go.sum ./
